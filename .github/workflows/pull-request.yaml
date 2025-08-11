@@ -1,0 +1,61 @@
+---
+name: PR Checks
+run-name:
+  "${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name
+  }} - ${{github.workflow }} (${{ github.event_name }})"
+
+on:
+  - pull_request
+
+concurrency:
+  group: "${{ github.ref_name }}${{ github.workflow }}${{ github.event_name }}"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    permissions:
+      # gradle/actions/dependency-submission@v4
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version-file: .tool-versions
+          distribution: graalvm
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Check Formatting
+        run: ./gradlew spotlessCheck
+
+      - name: Run Tests
+        run: ./gradlew check
+
+      - name: Build Deployment Artifact
+        run: ./gradlew bootJar
+
+      - name: OWASP Dependency Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |-
+          if ! output="$(gradle dependencyCheckAggregate 2>&1)"; then
+            grep 'Error updating the NVD Data' <<<"${output}" &&
+              echo "::warning::⚠️ NVD API error, skipping vulnerability check" ||
+              echo "${output}"
+          fi
+
+      - name: Generate and Submit Dependency Graph
+        uses: gradle/actions/dependency-submission@v4
+
+      - name: Save Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: "**/build/reports/"
